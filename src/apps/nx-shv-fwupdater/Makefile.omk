@@ -1,0 +1,22 @@
+# -*- makefile -*-
+
+default_CONFIG  = CONFIG_APP_MZ_APO_SERVO_KNOBS_SHV=x
+
+ifeq ($(CONFIG_APP_MZ_APO_SERVO_KNOBS_SHV),y)
+
+LOCAL_CONFIG_H = appl_config.h
+
+#INCLUDES += -I$(USER_INCLUDE_DIR)/ul_lib -I.
+
+INCLUDES += -I.
+
+bin_PROGRAMS = nx-shv-fwupdater
+
+nx-shv-fwupdater_SOURCES  = appl_main.c appl_shv.c
+
+lib_LOADLIBES += shvtree ulevpoll ulut
+lib_LOADLIBES += rt
+lib_LOADLIBES += pthread
+lib_LOADLIBES += m
+
+endif #CONFIG_APP_MZ_APO_2DC_T1

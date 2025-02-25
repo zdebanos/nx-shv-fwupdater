@@ -1,0 +1,6 @@
+[submodule "submodule/ulut"]
+	path = submodule/ulut
+	url = https://git.code.sf.net/p/ulan/ulut
+[submodule "submodule/ulevpoll"]
+	path = submodule/ulevpoll
+	url = https://git.code.sf.net/p/ulan/ulevpoll

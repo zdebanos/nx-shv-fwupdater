@@ -1,0 +1,10 @@
+#!/bin/bash
+
+export SHV_BROKER_IP="147.32.87.165"
+export SHV_BROKER_PORT=3755
+export SHV_BROKER_USER="admin"
+export SHV_BROKER_PASSWORD="admin password"
+export SHV_BROKER_DEV_ID="mz_apo_knobs_$(hostname)"
+export SHV_BROKER_MOUNT="test/$SHV_BROKER_DEV_ID"
+
+./mz_apo-servo-knobs-shv
