@@ -33,6 +33,7 @@
 #include <errno.h>
 
 #include "cchainpack.h"
+#include "ccpcp.h"
 #include "ccpon.h"
 
 #include "ulut/ul_utdefs.h"
@@ -309,7 +310,7 @@ void shv_pack_head_reply(shv_con_ctx_t *shv_ctx, int rid)
  * Name: shv_unpack_skip
  *
  * Description:
- *   Skip data inside container
+ *   Skip data inside container and the end of the container itself
  *
  ****************************************************************************/
 
@@ -336,6 +337,40 @@ int shv_unpack_skip(shv_con_ctx_t * shv_ctx)
         }
     }
   while (level);
+}
+
+/****************************************************************************
+ * Name: shv_unpack_discard
+ *
+ * Description:
+ *   Discard current data of arbitrary type
+ *
+ ****************************************************************************/
+
+int shv_unpack_discard(shv_con_ctx_t * shv_ctx)
+{
+  struct ccpcp_unpack_context *ctx = &shv_ctx->unpack_ctx;
+  int level = 0;
+
+  if ((ctx->item.type == CCPCP_ITEM_META) ||
+      (ctx->item.type == CCPCP_ITEM_LIST) ||
+      (ctx->item.type == CCPCP_ITEM_MAP) ||
+      (ctx->item.type == CCPCP_ITEM_IMAP))
+    {
+      shv_unpack_skip(shv_ctx);
+    }
+  else
+    {
+      if (((ctx->item.type == CCPCP_ITEM_BLOB) ||
+          (ctx->item.type == CCPCP_ITEM_STRING)))
+        {
+          while (ctx->item.as.String.last_chunk != 0)
+            {
+              cchainpack_unpack_next(ctx);
+              if (ctx->err_no != CCPCP_RC_OK) return -1;
+            }
+        }
+    }
 }
 
 
