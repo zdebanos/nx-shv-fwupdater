@@ -24,21 +24,8 @@ int main(int argv, char *argc[])
   int wstatus = 0;
   struct timespec sleep_time = {100, 0};
 
-  
-  /* Open the file descriptor */
-  int flags = O_RDWR;
-#ifdef LINUX_TESTING
-  flags |= O_CREAT;
-#endif
-  int fd = open("shvfile", flags);
-  if (fd < 0) {
-    fprintf(stderr, "ERROR: openening file failed %d.\n", errno);
-    exit(1);
-  }
-  
-  ctx = shv_tree_init(fd);
+  ctx = shv_tree_init();
   if (ctx == NULL) {
-    close(fd);
     fprintf(stderr, "ERROR: shv_tree_init() failed.\n");
     exit(1);
   }
@@ -46,7 +33,6 @@ int main(int argv, char *argc[])
     //wait(&wstatus);
     clock_nanosleep(CLOCK_MONOTONIC, 0, &sleep_time, NULL);
   }
-  close(fd);
 
   return 0;
 }

@@ -281,15 +281,10 @@ shv_node_t *shv_tree_create(void)
  *
  ****************************************************************************/
 
-shv_con_ctx_t *shv_tree_init(int fd)
+shv_con_ctx_t *shv_tree_init(void)
 {
   shv_node_t *tree_root;
   
-  if (fd < 0) {
-    return NULL;
-  }
-  shv_file_fd = fd;
-
   tree_root = shv_tree_create();
   if (tree_root == NULL) {
     fprintf(stderr, "ERROR: shv_tree_create() failed.\n");
