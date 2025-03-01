@@ -22,6 +22,7 @@
 #define _SHV_FILE_COM_H
 
 #include "shv_com.h"
+#include "shv_tree.h"
 
 enum shv_file_type
 {
@@ -40,10 +41,10 @@ enum shv_file_node_keys
   SHV_FILE_NODE_KEYS_COUNT
 };
 
-void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, int file_type, int file_size, int page_size);
-void shv_send_size(shv_con_ctx_t *shv_ctx, int rid, int file_size);
-void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, unsigned int crc);
-void shv_confirm_write(shv_con_ctx_t *shv_ctx, int rid);
-int shv_process_write(ccpcp_unpack_context *ctx, void *buf, int buf_size, int *offset);
+void     shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
+void     shv_send_size(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
+void      shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
+void shv_confirm_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
+int  shv_process_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
 
 #endif /* _SHV_FILE_COM_H */

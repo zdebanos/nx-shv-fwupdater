@@ -350,7 +350,6 @@ int shv_unpack_skip(shv_con_ctx_t * shv_ctx)
 int shv_unpack_discard(shv_con_ctx_t * shv_ctx)
 {
   struct ccpcp_unpack_context *ctx = &shv_ctx->unpack_ctx;
-  int level = 0;
 
   if ((ctx->item.type == CCPCP_ITEM_META) ||
       (ctx->item.type == CCPCP_ITEM_LIST) ||
@@ -371,6 +370,8 @@ int shv_unpack_discard(shv_con_ctx_t * shv_ctx)
             }
         }
     }
+  
+  return 0;
 }
 
 

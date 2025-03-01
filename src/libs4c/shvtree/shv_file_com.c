@@ -19,32 +19,24 @@
 */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <cchainpack.h>
 #include <ccpon.h>
+#include <unistd.h>
 
 #include "ccpcp.h"
+#include "shv_com.h"
 #include "shv_tree.h"
 #include "shv_file_com.h"
 
-enum write_parser_state
-{
-  IMAP_START,
-  REQUEST_1,
-  LIST_START,
-  OFFSET,
-  BLOB,
-  LIST_STOP,
-  IMAP_STOP
-};
-
-
-void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, int file_type, int file_size, int page_size)
+void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
 {
   // should be REGULAR, only!
-  if (file_type != REGULAR) {
+  if (item->file_type != REGULAR) {
     return; 
   }
-
   ccpcp_pack_context_init(&shv_ctx->pack_ctx,shv_ctx->shv_data,
                           SHV_BUF_LEN, shv_overflow_handler);
   
@@ -66,15 +58,20 @@ void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, int file_type, int file_size
 
     // The first key (file type)
     cchainpack_pack_int(&shv_ctx->pack_ctx, FN_TYPE);
-    cchainpack_pack_int(&shv_ctx->pack_ctx, file_type);
+    cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_type);
     
     // The second key (file size)
     cchainpack_pack_int(&shv_ctx->pack_ctx, FN_SIZE);
-    cchainpack_pack_int(&shv_ctx->pack_ctx, file_size);
+    cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_size);
 
     // The third key (page size)
     cchainpack_pack_int(&shv_ctx->pack_ctx, FN_PAGESIZE);
-    cchainpack_pack_int(&shv_ctx->pack_ctx, page_size);
+    cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_pagesize);
+    
+    // The fifth key (max send size)
+    cchainpack_pack_int(&shv_ctx->pack_ctx, 5);
+    // receive the blobs each 128 bytes
+    cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_pagesize);
     
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
@@ -82,7 +79,7 @@ void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, int file_type, int file_size
   }
 }
 
-void shv_send_size(shv_con_ctx_t *shv_ctx, int rid, int file_size)
+void shv_send_size(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
 {
   ccpcp_pack_context_init(&shv_ctx->pack_ctx,shv_ctx->shv_data,
                           SHV_BUF_LEN, shv_overflow_handler);
@@ -101,14 +98,14 @@ void shv_send_size(shv_con_ctx_t *shv_ctx, int rid, int file_size)
 
     // Reply
     cchainpack_pack_int(&shv_ctx->pack_ctx, 2);
-    cchainpack_pack_int(&shv_ctx->pack_ctx, file_size);
+    cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_size);
     
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     shv_overflow_handler(&shv_ctx->pack_ctx, 0); 
   }
 }
 
-void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, unsigned int crc)
+void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
 {
   ccpcp_pack_context_init(&shv_ctx->pack_ctx,shv_ctx->shv_data,
                           SHV_BUF_LEN, shv_overflow_handler);
@@ -127,17 +124,17 @@ void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, unsigned int crc)
 
     // Reply
     cchainpack_pack_int(&shv_ctx->pack_ctx, 2);
-    cchainpack_pack_int(&shv_ctx->pack_ctx, crc);
+    cchainpack_pack_int(&shv_ctx->pack_ctx, item->crc);
     
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     shv_overflow_handler(&shv_ctx->pack_ctx, 0); 
   }
 }
 
-int shv_process_write(ccpcp_unpack_context *ctx, void *buf, int buf_size, int *offset)
+int shv_process_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
 {
   int ret;
-  int state = IMAP_START;
+  ccpcp_unpack_context *ctx = &shv_ctx->unpack_ctx;
 
   do {
     cchainpack_unpack_next(ctx);
@@ -145,11 +142,11 @@ int shv_process_write(ccpcp_unpack_context *ctx, void *buf, int buf_size, int *o
       return -1;
     }
     
-    switch (state) {
+    switch (item->state) {
     case IMAP_START: {
       // the start of imap, proceed next
       if (ctx->item.type == CCPCP_ITEM_IMAP) {
-        state = LIST_START;
+        item->state = REQUEST_1;
       }
       break;
     }
@@ -157,62 +154,100 @@ int shv_process_write(ccpcp_unpack_context *ctx, void *buf, int buf_size, int *o
       // wait for UInt or Int (namely number 1)
       if (ctx->item.type == CCPCP_ITEM_INT) {
         if (ctx->item.as.Int == 1) {
-          state = LIST_START;
+          item->state = LIST_START;
         } else {
           // something different received
-          // shv_unpack_skip()
-          ctx->err_no = CCPCP_RC_MALFORMED_INPUT;
-          state = IMAP_START;
+          shv_unpack_discard(shv_ctx);
+          ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+          item->state = IMAP_START;
         }
       } else if (ctx->item.type == CCPCP_ITEM_UINT) {
         if (ctx->item.as.UInt == 1) {
-          state = LIST_START;
+          item->state = LIST_START;
         } else {
           // something different received
-          ctx->err_no = CCPCP_RC_MALFORMED_INPUT;
+          shv_unpack_discard(shv_ctx);
+          ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+          item->state = IMAP_START;
         }
       } else {
         // Int or UInt expected!
-        ctx->err_no = CCPCP_RC_MALFORMED_INPUT;
+        shv_unpack_discard(shv_ctx);
+        ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+        item->state = IMAP_START;
       }
+      break;
     }
     case LIST_START: {
       if (ctx->item.type == CCPCP_ITEM_LIST) {
-        state = OFFSET;
+        item->state = OFFSET;
       } else {
-        // shv_unpack_skip
-        ctx->err_no = CCPCP_RC_MALFORMED_INPUT;
+        shv_unpack_discard(shv_ctx);
+        ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+        item->state = IMAP_START;
       }
+      break;
     }
     case OFFSET: {
       if (ctx->item.type == CCPCP_ITEM_INT) {
-        *offset = ctx->item.as.Int;
-        state = BLOB;
+        // save the loaded offset into the struct
+        item->file_offset = ctx->item.as.Int;
+        item->state = BLOB;
+        
+        if (lseek(item->fd, item->file_offset, SEEK_SET) == (off_t)-1) {
+          // how to handle errors?
+          ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+          item->state = IMAP_START;
+        } else {
+          printf("lseek ok %d\n", item->file_offset);
+        }
+        
       } else { 
-        ctx->err_no = CCPCP_RC_MALFORMED_INPUT;
+        shv_unpack_discard(shv_ctx);
+        ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+        item->state = IMAP_START;
       }
+      break;
     }
     case BLOB: {
       if (ctx->item.type == CCPCP_ITEM_BLOB) {
-        // this actually unpacks the blob!
-        cchainpack_unpack_next(ctx);
-        if (ctx->err_no == CCPCP_RC_OK) {
-          state = LIST_STOP;
+        // write to the fd
+        if (write(item->fd, ctx->item.as.String.chunk_start, ctx->item.as.String.chunk_size) < 0) {
+          perror("write");
         }
+        if (ctx->item.as.String.last_chunk) {
+          // it is the last loaded chunk, we can now proceed
+          item->state = LIST_STOP;
+        }
+      } else {
+        shv_unpack_discard(shv_ctx);
+        ctx->err_no = CCPCP_RC_MALFORMED_INPUT;
+        item->state = IMAP_START;
       }
+      break;
     }
     case LIST_STOP: {
       if (ctx->item.type == CCPCP_ITEM_CONTAINER_END) {
-        state = IMAP_STOP;
+        item->state = IMAP_STOP;
       } else {
+        shv_unpack_discard(shv_ctx);
         ctx->err_no = CCPCP_RC_MALFORMED_INPUT;
+        item->state = IMAP_START;
       }
+      break;
     }
     case IMAP_STOP: {
       if (ctx->item.type != CCPCP_ITEM_CONTAINER_END) {
-        // yikes
+        // something horrible happened
         ctx->err_no = CCPCP_RC_MALFORMED_INPUT;
+        item->state = IMAP_START;
+      } else {
+        // restore state and return
+        printf("Process write completed succesfully!\n");
+        item->state = IMAP_START;
+        return 0;
       }
+      break;
     }
     default:
       break;
@@ -224,7 +259,7 @@ int shv_process_write(ccpcp_unpack_context *ctx, void *buf, int buf_size, int *o
   return ret; 
 }
 
-void shv_confirm_write(shv_con_ctx_t *shv_ctx, int rid)
+void shv_confirm_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
 {
   for (shv_ctx->shv_send = 0; shv_ctx->shv_send < 2; shv_ctx->shv_send++) {
     if (shv_ctx->shv_send) {

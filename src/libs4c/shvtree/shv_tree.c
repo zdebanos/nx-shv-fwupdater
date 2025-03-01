@@ -292,6 +292,35 @@ shv_node_t *shv_tree_node_new(const char *child_name,
 }
 
 /****************************************************************************
+ * Name: shv_tree_file_node_new
+ *
+ * Description:
+ *   Create new node shv_node_t and initialize it.
+ *
+ ****************************************************************************/
+
+shv_file_node_t *shv_tree_file_node_new(const char *child_name,
+                              const shv_dmap_t *dir, int mode)
+{
+  shv_file_node_t *item = malloc(sizeof(shv_file_node_t));
+  if (item == NULL)
+    {
+      printf("ERROR: malloc() failed\n");
+      return NULL;
+    }
+
+  memset(item, 0, sizeof(shv_file_node_t));
+
+  shv_tree_node_init((shv_node_t*) item, child_name, dir, mode);
+  item->state = IMAP_START;
+  item->file_type = 0;
+  item->file_size = 0x1000;
+  item->file_pagesize = 512;
+
+  return item;
+}
+
+/****************************************************************************
  * Name: shv_tree_destroy
  *
  * Description:

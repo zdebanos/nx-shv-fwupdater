@@ -22,7 +22,7 @@ int main(int argv, char *argc[])
 {
   shv_con_ctx_t *ctx;
   int wstatus = 0;
-  struct timespec sleep_time = { 100, 0};
+  struct timespec sleep_time = {100, 0};
 
   
   /* Open the file descriptor */

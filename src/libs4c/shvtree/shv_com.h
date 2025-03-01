@@ -52,5 +52,9 @@ void shv_overflow_handler(struct ccpcp_pack_context *ctx, size_t size_hint);
 void shv_pack_head_reply(shv_con_ctx_t *shv_ctx, int rid);
 
 int shv_unpack_data(ccpcp_unpack_context * ctx, int * v, double * d);
+int shv_unpack_discard(shv_con_ctx_t *shv_ctx);
+int shv_unpack_skip(shv_con_ctx_t *shv_ctx);
+void shv_con_ctx_init(shv_con_ctx_t *shv_ctx, struct shv_node *root);
+void *shv_con_handler(void * p);
 
 #endif /* SHV_FUNCTIONS_H */
