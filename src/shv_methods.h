@@ -1,8 +1,8 @@
 #ifndef SHV_METHODS_H
 #define SHV_METHODS_H
 
-#include <ulut/ul_gavlcust.h>
-#include <ulut/ul_gsacust.h>
+#include "ulut/ul_gavlcust.h"
+#include "ulut/ul_gsacust.h"
 #include <string.h>
 
 #include "cchainpack.h"

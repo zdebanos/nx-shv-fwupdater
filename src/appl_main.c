@@ -8,8 +8,6 @@
 
 #include "shv_tree.h"
 #include "shv_methods.h"
-#include "ulut/ul_utdefs.h"
-
 #include "appl_shv.h"
 
 

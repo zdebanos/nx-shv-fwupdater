@@ -7,8 +7,6 @@
 #include "shv_tree.h"
 #include "shv_file_com.h"
 #include "shv_methods.h"
-#include "ulut/ul_utdefs.h"
-
 #include "appl_shv.h"
 
 #define LINUX_TESTING
