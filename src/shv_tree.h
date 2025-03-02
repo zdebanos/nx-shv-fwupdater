@@ -62,6 +62,8 @@ typedef struct shv_file_node {
   int file_pagesize;
   int file_offset;
   int crc;
+  int received_bytes;        /* Accumulator to check for overflows */
+  int slotnum;
 } shv_file_node_t;
 
 typedef struct shv_node_typed_val {

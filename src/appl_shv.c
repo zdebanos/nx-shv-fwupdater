@@ -3,13 +3,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
+#include <sys/boardctl.h>
 
 #include "shv_tree.h"
 #include "shv_file_com.h"
 #include "shv_methods.h"
 #include "appl_shv.h"
 
-#define LINUX_TESTING
+#include <nxboot.h>
+#include <nuttx/mtd/mtd.h>
+#include <nuttx/crc32.h>
 
 /****************************************************************************/
 
@@ -140,7 +144,10 @@ const shv_dmap_t shv_dev_dotdevice_dmap =
   }
 };
 
-static int shv_file_fd;
+static int flash_partition_info(int fd, struct mtd_geometry_s *geometry);
+static int flash_partition_erase_last_sector(int fd, struct mtd_geometry_s geometry);
+static bool nofirstwrite = false;
+uint8_t crcbuf[256];
 
 /****************************************************************************
  * Name: shv_device_type
@@ -160,15 +167,66 @@ int shv_root_device_type(shv_con_ctx_t * shv_ctx, shv_node_t *item, int rid)
 
 int shv_file_crc(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
+  int flash_reads;
+  uint32_t crc = 0;
+  struct mtd_geometry_s geometry;
+  shv_file_node_t *file = (shv_file_node_t *) item;
+  const char *file_name = NULL;
+
+  // first, flush all flash data
+  if (fsync(file->fd) < 0) {
+    perror("fsync");
+    return ERROR;
+  }
+  if (file->slotnum == NXBOOT_SECONDARY_SLOT_NUM) {
+    file_name = CONFIG_NXBOOT_SECONDARY_SLOT_PATH;
+  } else if (file->slotnum == NXBOOT_TERTIARY_SLOT_NUM) {
+    file_name = CONFIG_NXBOOT_TERTIARY_SLOT_PATH;
+  } else {
+    return ERROR;
+  }
+
+  flash_partition_info(file->fd, &geometry);
+  flash_reads = file->received_bytes / geometry.blocksize + 1;
+  printf("The updater managed to receive %d bytes. That makes %d blocks.\n", file->received_bytes, flash_reads);
+
+  // Now: read all the data from the flash memory and calculate CRC.
+  // We can utilize the NuttX CRC (it's the as as zlib.crc32 in Python).
+  
+  while (file->received_bytes > 0) {
+    int to_read, readsize;
+    if (file->received_bytes >= geometry.blocksize) {
+      to_read = geometry.blocksize;
+    } else {
+      to_read = file->received_bytes;
+    }
+    file->received_bytes -= geometry.blocksize;
+    readsize = read(file->fd, crcbuf, to_read);
+    crc = crc32part(crcbuf, to_read, crc);
+  }
+  printf("Calculated CRC %lx\n", crc);
+
+  file->received_bytes = 0;
   shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
-  shv_send_int(shv_ctx, rid, 0);
+  shv_send_int(shv_ctx, rid, crc);
   return 0;
 }
 
 int shv_file_write(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
   int ret;
-  printf("Write called!\n");
+  shv_file_node_t *file = (shv_file_node_t *) item;
+
+  if (!nofirstwrite) {
+    // during the first write, the flash_partition_area must be erased
+    struct mtd_geometry_s geometry;
+    if (flash_partition_info(file->fd, &geometry) >= 0) {
+      if (flash_partition_erase_last_sector(file->fd, geometry) >= 0) {
+        printf("First page erase!\n");
+        nofirstwrite = true;
+      }
+    }
+  } 
   ret = shv_process_write(shv_ctx, rid, (shv_file_node_t *) item);
   shv_confirm_write(shv_ctx, rid, (shv_file_node_t *) item);
   return 0;
@@ -176,7 +234,6 @@ int shv_file_write(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 
 int shv_file_stat(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
-  printf("Stat called!\n");
   shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
   shv_send_stat(shv_ctx, rid, (shv_file_node_t *) item);
   return 0;
@@ -191,7 +248,6 @@ int shv_file_size(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 
 int shv_file_confirmed(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
-  printf("Confirmed called!\n");
   shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
   shv_send_int(shv_ctx, rid, 0);
   return 0;
@@ -199,9 +255,61 @@ int shv_file_confirmed(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 
 int shv_device_reset(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
-  printf("Reset called!\n");
+  int secs = 3;
   shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
+  shv_send_int(shv_ctx, rid, 0);
+
+  // wait a bit so the response arrives, then reset
+  for (int i = 0; i < secs; ++i) {
+    printf("Resetting in %d\n", secs-i);
+    usleep(1000 * 1000);
+  }
+  boardctl(BOARDIOC_RESET, BOARDIOC_RESETCAUSE_CPU_SOFT);
+
+  // should not get here
   return 0;
+}
+
+/****************************************************************************
+ * Name: flash_partition_erase_last_sector
+ *
+ * Description:
+ *   Erases the last sector of the partition
+ *
+ * Input parameters:
+ *   fd: Valid file descriptor.
+ *
+ * Returned Value:
+ *   0 on success, -1 on failure.
+ *
+ ****************************************************************************/
+
+static int flash_partition_erase_last_sector(int fd, struct mtd_geometry_s geometry)
+{
+  int ret;
+  struct mtd_erase_s erase;
+
+  erase.startblock = geometry.neraseblocks - 1;
+  erase.nblocks = 1;
+
+  ret = ioctl(fd, MTDIOC_ERASESECTORS, &erase);
+  if (ret < 0) {
+    return ERROR;
+  }
+
+  return OK;
+}
+
+
+static int flash_partition_info(int fd, struct mtd_geometry_s *geometry)
+{
+  int ret;
+  ret = ioctl(fd, MTDIOC_GEOMETRY, (unsigned long)((uintptr_t)geometry));
+  if (ret < 0)
+    {
+      return ERROR;
+    }
+  return OK;
 }
 
 /****************************************************************************
@@ -214,11 +322,21 @@ int shv_device_reset(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 
 shv_node_t *shv_tree_create(void)
 {
+  const char *file_name;
+  struct nxboot_state nxb_state;
+  struct mtd_geometry_s geometry;
+  
   shv_node_t *tree_root, *dotdevice_node, *fwStable_node;
   shv_file_node_t *fwUpdate_node;
-  shv_node_typed_val_t *item_val;
 
-  int mode = 0;
+  // also, if we got here, we can confirm the previous image is OK
+  printf("Version 21\n");
+  printf("Trying to confirm image\n");
+  if (nxboot_confirm() < 0) {
+    perror("nxboot confirm");
+  } else {
+    printf("Image confirm OK!\n");
+  }
 
   tree_root = shv_tree_node_new("", &shv_dev_root_dmap, 0);
   if (tree_root == NULL) {
@@ -230,44 +348,79 @@ shv_node_t *shv_tree_create(void)
   fwUpdate_node = shv_tree_file_node_new("fwUpdate", &shv_dev_fwUpdate_dmap, 0);
   if (fwUpdate_node == NULL)  {
     fprintf(stderr, "ERROR: shv_tree_node_new failed\n");
-    free(tree_root);
-    return NULL;
+    goto err1;
   }
+
   // before adding the node to the tree, initialize its parameters 
-  int flags = O_CREAT | O_RDWR;
-  fwUpdate_node->fd = open("shvfile", flags);
+  // this requires getting the information about the flash memory
+  // and since this only now works with nxboot, we must get the
+  // right partition 
+  
+  if (nxboot_get_state(&nxb_state) < 0) {
+    perror("nxboot_get_state");
+    goto err2;
+  }
+  
+  printf("%d %d %d %d %d", nxb_state.update, nxb_state.recovery, nxb_state.recovery_valid, nxb_state.primary_confirmed, nxb_state.next_boot);
+  
+  // now, choose the right partition
+  if (nxb_state.update == NXBOOT_SECONDARY_SLOT_NUM) {
+    file_name = CONFIG_NXBOOT_SECONDARY_SLOT_PATH;
+    fwUpdate_node->slotnum = NXBOOT_SECONDARY_SLOT_NUM;
+  } else if (nxb_state.update == NXBOOT_TERTIARY_SLOT_NUM) {
+    file_name = CONFIG_NXBOOT_TERTIARY_SLOT_PATH;
+    fwUpdate_node->slotnum = NXBOOT_TERTIARY_SLOT_NUM;
+  } else {
+    fprintf(stderr, "Unexpected value in nxboot\n");
+    goto err2;
+  }
+  printf("Opening %s\n", file_name);
+  
+  fwUpdate_node->fd = open(file_name, O_RDWR);
   if (fwUpdate_node->fd < 0) {
     perror("open");
-    free(tree_root);
-    free(fwUpdate_node);
-    return NULL;
+    goto err2;
   }
+  
+  if (ioctl(fwUpdate_node->fd, MTDIOC_GEOMETRY, (unsigned long)((uintptr_t)&geometry)) < 0) {
+    perror("ioctl");
+    goto err3;
+  }
+
   fwUpdate_node->file_type = REGULAR;
+  fwUpdate_node->file_size = geometry.erasesize * geometry.neraseblocks;
   fwUpdate_node->crc = -1;
+  fwUpdate_node->file_offset = 0;
+  fwUpdate_node->file_pagesize = geometry.blocksize;
+  fwUpdate_node->received_bytes = 0;
 
   shv_tree_add_child(tree_root, (shv_node_t*) fwUpdate_node);
-  
   
   fwStable_node = shv_tree_node_new("fwStable", &shv_dev_fwStable_dmap, 0);
   if (fwStable_node == NULL) {
     fprintf(stderr, "ERROR: shv_tree_node_new failed\n");
-    free(fwUpdate_node);
-    free(tree_root);
-    return NULL;
+    goto err3;
   }
   shv_tree_add_child(tree_root, fwStable_node);
   
   dotdevice_node = shv_tree_node_new(".device", &shv_dev_dotdevice_dmap, 0);
   if (dotdevice_node == NULL) {
     fprintf(stderr, "ERROR: shv_tree_node_new failed\n");
-    free(fwUpdate_node);
-    free(fwStable_node);
-    free(tree_root);
-    return NULL;
+    goto err4;
   }
   shv_tree_add_child(tree_root, dotdevice_node);
   
   return tree_root;
+  
+err4:
+  free(fwStable_node);
+err3:
+  close(fwUpdate_node->fd);
+err2:
+  free(fwUpdate_node);
+err1:
+  free(tree_root);
+  return NULL;
 }
 
 /****************************************************************************
@@ -283,12 +436,18 @@ shv_con_ctx_t *shv_tree_init(void)
 {
   shv_node_t *tree_root;
   
+  setenv("SHV_BROKER_IP", "147.32.87.165", 0);
+  setenv("SHV_BROKER_PORT", "3755", 0);
+  setenv("SHV_BROKER_USER", "mzapoknobs", 0);
+  setenv("SHV_BROKER_PASSWORD", "TODO", 0);
+  setenv("SHV_BROKER_MOUNT", "test/SaMoCon-SHV", 0);
+  
   tree_root = shv_tree_create();
   if (tree_root == NULL) {
     fprintf(stderr, "ERROR: shv_tree_create() failed.\n");
     return NULL;
   }
-
+  
   /* Initialize SHV connection */
 
   shv_con_ctx_t *ctx = shv_com_init(tree_root);

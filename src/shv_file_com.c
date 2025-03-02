@@ -69,7 +69,7 @@ void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
     
     // The fifth key (max send size)
     cchainpack_pack_int(&shv_ctx->pack_ctx, 5);
-    // receive the blobs each 128 bytes
+    // receive the blobs that are multiples of a pagesize
     cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_pagesize);
     
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
@@ -198,7 +198,6 @@ int shv_process_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
           ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
           item->state = IMAP_START;
         } else {
-          printf("lseek ok %d\n", item->file_offset);
         }
         
       } else { 
@@ -210,9 +209,15 @@ int shv_process_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
     }
     case BLOB: {
       if (ctx->item.type == CCPCP_ITEM_BLOB) {
-        // write to the fd
-        if (write(item->fd, ctx->item.as.String.chunk_start, ctx->item.as.String.chunk_size) < 0) {
-          perror("write");
+        // check overflow
+        item->received_bytes += ctx->item.as.String.chunk_size;
+        if (item->received_bytes <= item->file_size) {
+          // write to the fd
+          if (write(item->fd, ctx->item.as.String.chunk_start, ctx->item.as.String.chunk_size) < 0) {
+            perror("write");
+          } else {
+            printf("Written %lu bytes!\n", ctx->item.as.String.chunk_size);
+          }
         }
         if (ctx->item.as.String.last_chunk) {
           // it is the last loaded chunk, we can now proceed
