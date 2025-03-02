@@ -13,7 +13,7 @@ if EXAMPLES_NX_SHV_FWUPDATER
 
 config EXAMPLES_NX_SHV_FWUPDATER_PROGNAME
 	string "nx-shv-fwupdater App Name"
-	default "nx-shv-fwupdater"
+	default "nx_shv_fwupdater"
 	---help---
 		This is the name of the program that will be used when the NSH ELF
 		program is installed.

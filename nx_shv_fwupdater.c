@@ -1,22 +1,16 @@
-#include <sys/wait.h>
-#include <stdlib.h>
 #include <stdio.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <unistd.h>
-#include <time.h>
 
-#include "shv_tree.h"
-#include "shv_methods.h"
-#include "appl_shv.h"
-
+#include "src/shv_tree.h"
+#include "src/shv_methods.h"
+#include "src/appl_shv.h"
 
 int get_priority_for_com(void)
 {
   return 0;
 }
 
-int main(int argv, char *argc[])
+int main(int argc, char *argv[])
 {
   shv_con_ctx_t *ctx;
   int wstatus = 0;

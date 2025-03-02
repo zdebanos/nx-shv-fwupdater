@@ -291,7 +291,7 @@ void ccpon_gmtime(int64_t epoch_sec, struct tm *tm)
 
 	int32_t y;
 	unsigned m, d;
-	civil_from_days(days_since_epoch, &y, &m, &d);
+	civil_from_days(days_since_epoch, (int*) &y, &m, &d);
 	tm->tm_year = y - 1900;
 	tm->tm_mon = m;
 	tm->tm_mday = d;

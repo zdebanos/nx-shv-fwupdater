@@ -20,19 +20,13 @@
 
 include $(APPDIR)/Make.defs
 
-# spinlock_bench application
+MODULE = $(CONFIG_EXAMPLES_NX_SHV_FWUPDATER)
 
-############################################################################
-# Applications Configuration
-############################################################################
+PROGNAME  += $(CONFIG_EXAMPLES_NX_SHV_FWUPDATER_PROGNAME)
+PRIORITY  += $(CONFIG_EXAMPLES_NX_SHV_FWUPDATER_PRIORITY)
+STACKSIZE += $(CONFIG_EXAMPLES_NX_SHV_FWUPDATER_STACKSIZE)
 
-MODULE = $(CONFIG_NX_SHV_FWUPDATER_CYCLICTEST)
-
-PROGNAME  += $(CONFIG_NX_SHV_FWUPDATER_PROGNAME)
-PRIORITY  += $(CONFIG_NX_SHV_FWUPDATER_PRIORITY)
-STACKSIZE += $(CONFIG_NX_SHV_FWUPDATER_STACKSIZE)
-
-CSRCS =
+MAINSRC += nx_shv_fwupdater.c
 include src/Makefile
 
 # Build with WebAssembly when CONFIG_INTERPRETERS_WAMR is enabled
