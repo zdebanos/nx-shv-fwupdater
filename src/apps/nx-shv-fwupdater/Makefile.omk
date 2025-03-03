@@ -10,13 +10,17 @@ LOCAL_CONFIG_H = appl_config.h
 
 INCLUDES += -I.
 
-bin_PROGRAMS = nx-shv-fwupdater
+bin_PROGRAMS = shv_fwupdater
 
-nx-shv-fwupdater_SOURCES  = appl_main.c appl_shv.c
+shv_fwupdater_SOURCES  = appl_main.c appl_shv.c
 
 lib_LOADLIBES += shvtree ulevpoll ulut
+ifeq ($(firstword $(OMK_RULES_TYPE)),nuttx)
+lib_LOADLIBES += system_opt
+else
 lib_LOADLIBES += rt
 lib_LOADLIBES += pthread
 lib_LOADLIBES += m
+endif
 
 endif #CONFIG_APP_MZ_APO_2DC_T1
