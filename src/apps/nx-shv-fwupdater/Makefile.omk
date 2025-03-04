@@ -1,8 +1,8 @@
 # -*- makefile -*-
 
-default_CONFIG  = CONFIG_APP_MZ_APO_SERVO_KNOBS_SHV=x
+default_CONFIG  = CONFIG_APP_SHV_FWUPDATER=x
 
-ifeq ($(CONFIG_APP_MZ_APO_SERVO_KNOBS_SHV),y)
+ifeq ($(CONFIG_APP_SHV_FWUPDATER),y)
 
 LOCAL_CONFIG_H = appl_config.h
 
@@ -13,6 +13,9 @@ INCLUDES += -I.
 bin_PROGRAMS = shv_fwupdater
 
 shv_fwupdater_SOURCES  = appl_main.c appl_shv.c
+
+shv_fwupdater_PROGBUILTIN = all
+shv_fwupdater_PROGBUILTIN_EXCLUDE = module ice_v_pmsm
 
 lib_LOADLIBES += shvtree ulevpoll ulut
 ifeq ($(firstword $(OMK_RULES_TYPE)),nuttx)
