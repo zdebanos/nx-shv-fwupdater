@@ -70,7 +70,7 @@ void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
     // The fifth key (max send size)
     cchainpack_pack_int(&shv_ctx->pack_ctx, 5);
     // receive the blobs that are multiples of a pagesize
-    cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_pagesize);
+    cchainpack_pack_int(&shv_ctx->pack_ctx, 8*item->file_pagesize);
     
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
@@ -123,7 +123,7 @@ void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
 
     // Reply
     cchainpack_pack_int(&shv_ctx->pack_ctx, 2);
-    cchainpack_pack_int(&shv_ctx->pack_ctx, item->crc);
+    cchainpack_pack_uint(&shv_ctx->pack_ctx, item->crc);
     
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     shv_overflow_handler(&shv_ctx->pack_ctx, 0); 
@@ -215,8 +215,6 @@ int shv_process_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
           // write to the fd
           if (write(item->fd, ctx->item.as.String.chunk_start, ctx->item.as.String.chunk_size) < 0) {
             perror("write");
-          } else {
-            printf("Written %lu bytes!\n", ctx->item.as.String.chunk_size);
           }
         }
         if (ctx->item.as.String.last_chunk) {
@@ -247,7 +245,6 @@ int shv_process_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
         item->state = IMAP_START;
       } else {
         // restore state and return
-        printf("Process write completed succesfully!\n");
         item->state = IMAP_START;
         return 0;
       }

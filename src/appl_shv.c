@@ -168,16 +168,15 @@ int shv_root_device_type(shv_con_ctx_t * shv_ctx, shv_node_t *item, int rid)
 int shv_file_crc(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
   int flash_reads;
-  uint32_t crc = 0;
   struct mtd_geometry_s geometry;
   shv_file_node_t *file = (shv_file_node_t *) item;
   const char *file_name = NULL;
 
-  // first, flush all flash data
-  if (fsync(file->fd) < 0) {
-    perror("fsync");
-    return ERROR;
-  }
+  ioctl(file->fd, BIOC_FLUSH);
+  // flush does not work properly, so we just do this hack:
+  // first close the file and then reopen it, this actually flushes the data
+  close(file->fd);
+
   if (file->slotnum == NXBOOT_SECONDARY_SLOT_NUM) {
     file_name = CONFIG_NXBOOT_SECONDARY_SLOT_PATH;
   } else if (file->slotnum == NXBOOT_TERTIARY_SLOT_NUM) {
@@ -186,13 +185,16 @@ int shv_file_crc(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
     return ERROR;
   }
 
+  file->fd = open(file_name, O_RDWR);
+
   flash_partition_info(file->fd, &geometry);
   flash_reads = file->received_bytes / geometry.blocksize + 1;
-  printf("The updater managed to receive %d bytes. That makes %d blocks.\n", file->received_bytes, flash_reads);
+  printf("The updater managed to receive %d bytes\n", file->received_bytes);
 
   // Now: read all the data from the flash memory and calculate CRC.
   // We can utilize the NuttX CRC (it's the as as zlib.crc32 in Python).
   
+  file->crc = 0;
   while (file->received_bytes > 0) {
     int to_read, readsize;
     if (file->received_bytes >= geometry.blocksize) {
@@ -202,13 +204,12 @@ int shv_file_crc(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
     }
     file->received_bytes -= geometry.blocksize;
     readsize = read(file->fd, crcbuf, to_read);
-    crc = crc32part(crcbuf, to_read, crc);
+    file->crc = crc32part(crcbuf, to_read, file->crc);
   }
-  printf("Calculated CRC %lx\n", crc);
 
   file->received_bytes = 0;
   shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
-  shv_send_int(shv_ctx, rid, crc);
+  shv_send_crc(shv_ctx, rid, (shv_file_node_t *) item);
   return 0;
 }
 
@@ -260,10 +261,7 @@ int shv_device_reset(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
   shv_send_int(shv_ctx, rid, 0);
 
   // wait a bit so the response arrives, then reset
-  for (int i = 0; i < secs; ++i) {
-    printf("Resetting in %d\n", secs-i);
-    usleep(1000 * 1000);
-  }
+  usleep(2000 * 1000);
   boardctl(BOARDIOC_RESET, BOARDIOC_RESETCAUSE_CPU_SOFT);
 
   // should not get here
@@ -300,6 +298,19 @@ static int flash_partition_erase_last_sector(int fd, struct mtd_geometry_s geome
   return OK;
 }
 
+/****************************************************************************
+ * Name: flash_partition_info
+ *
+ * Description:
+ *   Get flash parameters
+ *
+ * Input parameters:
+ *   fd: Valid file descriptor.
+ *
+ * Returned Value:
+ *   0 on success, -1 on failure.
+ *
+ ****************************************************************************/
 
 static int flash_partition_info(int fd, struct mtd_geometry_s *geometry)
 {
@@ -330,7 +341,7 @@ shv_node_t *shv_tree_create(void)
   shv_file_node_t *fwUpdate_node;
 
   // also, if we got here, we can confirm the previous image is OK
-  printf("Version 21\n");
+  printf("Version 31\n");
   printf("Trying to confirm image\n");
   if (nxboot_confirm() < 0) {
     perror("nxboot confirm");
@@ -439,7 +450,7 @@ shv_con_ctx_t *shv_tree_init(void)
   setenv("SHV_BROKER_IP", "147.32.87.165", 0);
   setenv("SHV_BROKER_PORT", "3755", 0);
   setenv("SHV_BROKER_USER", "mzapoknobs", 0);
-  setenv("SHV_BROKER_PASSWORD", "TODO", 0);
+  setenv("SHV_BROKER_PASSWORD", "d4268ee1bdb5605b4c", 0);
   setenv("SHV_BROKER_MOUNT", "test/SaMoCon-SHV", 0);
   
   tree_root = shv_tree_create();

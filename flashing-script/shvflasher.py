@@ -4,7 +4,7 @@
 #            Stepan Pressl 20025 <pressl.stepan@gmail.com>
 import asyncio
 import io
-import zlib
+import crcmod
 
 from shv import RpcUrl, SHVBytes, ValueClient
 
@@ -35,7 +35,8 @@ async def shv_flasher(connection: str, name: str, path_to_root: str, queue: asyn
         i = 0
         crc = 0
         while data := f.read(maxwrite):
-            crc = zlib.crc32(data, crc)
+            crc_func = crcmod.mkCrcFun(0x104C11DB7, initCrc=crc, rev=True, xorOut=0x00000000)
+            crc = crc_func(data)
             offset = i * maxwrite
             res = await client.call(node_name, "write", [offset, SHVBytes(data)])
             i += 1
@@ -43,13 +44,18 @@ async def shv_flasher(connection: str, name: str, path_to_root: str, queue: asyn
                 currProgress = (int)((i * 100) / transfers)
                 queue.put_nowait(currProgress)
 
-    print("Final CRC is:", hex(crc))
     print("Flashing completed!")
     
     # now get the CRC from the device and reset the device, if OK
     res = await client.call(node_name, "crc")
+    # just to be sure, make it unsigned
+    res = res & 0xFFFFFFFF
+    # the result of the CRC is signed, actually, so make reinterpret it as unsigned
+    print(f"Calculated CRC: {hex(crc)} and received: {hex(res)}")
 
-    # TODO check
-    res = await client.call(node_name_dotdevice, "reset") 
-    
-    await client.disconnect()
+    if res == crc:
+        print("Checksum match, perform reset!")
+        res = await client.call(node_name_dotdevice, "reset")
+        await client.disconnect()
+    else:
+        print("Checksum mismatch!")
