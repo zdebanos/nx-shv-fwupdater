@@ -43,8 +43,9 @@ enum shv_file_node_keys
 
 void     shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
 void     shv_send_size(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
-void      shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
+void      shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item, uint32_t crc);
 void shv_confirm_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
 int  shv_process_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
+int    shv_process_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item);
 
 #endif /* _SHV_FILE_COM_H */

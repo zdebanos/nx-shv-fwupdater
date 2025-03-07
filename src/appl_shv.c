@@ -165,9 +165,37 @@ int shv_root_device_type(shv_con_ctx_t * shv_ctx, shv_node_t *item, int rid)
   return 0;
 }
 
+static uint32_t shv_file_calculate_crc(int size, int offset, int fd)
+{
+  uint32_t crc = 0;
+
+  // first, move to the desired offset
+  if (lseek(fd, offset, SEEK_SET) == (off_t) -1) {
+    perror("lseek");
+    return 0;
+  }
+
+  while (size > 0) {
+    int to_read, readsize;
+    if (size >= sizeof(crcbuf)) {
+      to_read = sizeof(crcbuf);
+    } else {
+      to_read = size;
+    }
+    size -= sizeof(crcbuf);
+    readsize = read(fd, crcbuf, to_read);
+    crc = crc32part(crcbuf, to_read, crc);
+  }
+
+  return crc;
+}
+
 int shv_file_crc(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
+  int ret;
   int flash_reads;
+  int offset, size;
+  uint32_t crc;
   struct mtd_geometry_s geometry;
   shv_file_node_t *file = (shv_file_node_t *) item;
   const char *file_name = NULL;
@@ -176,7 +204,6 @@ int shv_file_crc(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
   // flush does not work properly, so we just do this hack:
   // first close the file and then reopen it, this actually flushes the data
   close(file->fd);
-
   if (file->slotnum == NXBOOT_SECONDARY_SLOT_NUM) {
     file_name = CONFIG_NXBOOT_SECONDARY_SLOT_PATH;
   } else if (file->slotnum == NXBOOT_TERTIARY_SLOT_NUM) {
@@ -184,32 +211,30 @@ int shv_file_crc(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
   } else {
     return ERROR;
   }
-
   file->fd = open(file_name, O_RDWR);
 
-  flash_partition_info(file->fd, &geometry);
-  flash_reads = file->received_bytes / geometry.blocksize + 1;
-  printf("The updater managed to receive %d bytes\n", file->received_bytes);
-
-  // Now: read all the data from the flash memory and calculate CRC.
-  // We can utilize the NuttX CRC (it's the as as zlib.crc32 in Python).
-  
-  file->crc = 0;
-  while (file->received_bytes > 0) {
-    int to_read, readsize;
-    if (file->received_bytes >= geometry.blocksize) {
-      to_read = geometry.blocksize;
-    } else {
-      to_read = file->received_bytes;
-    }
-    file->received_bytes -= geometry.blocksize;
-    readsize = read(file->fd, crcbuf, to_read);
-    file->crc = crc32part(crcbuf, to_read, file->crc);
+  ret = shv_process_crc(shv_ctx, rid, file);
+  if (ret == 0) {
+    // this shall calculate the crc over the whole file!
+    offset = 0;
+    size = file->file_size;
+  } else if (ret == 1) {
+    // this shall calculate the crc from offset to end
+    offset = file->crc_offset;
+    size = file->file_size - file->crc_offset;
+  } else if (ret == 2) {
+    // this shall calculate the crc within a specified range
+    offset = file->crc_offset;
+    size = file->crc_size;
   }
 
   file->received_bytes = 0;
-  shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
-  shv_send_crc(shv_ctx, rid, (shv_file_node_t *) item);
+  if (ret >= 0) {
+    crc = shv_file_calculate_crc(size, offset, file->fd);
+  } else {
+    crc = 0;
+  }
+  shv_send_crc(shv_ctx, rid, (shv_file_node_t *) item, crc);
   return 0;
 }
 
@@ -256,7 +281,6 @@ int shv_file_confirmed(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 
 int shv_device_reset(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
-  int secs = 3;
   shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
   shv_send_int(shv_ctx, rid, 0);
 
@@ -341,7 +365,7 @@ shv_node_t *shv_tree_create(void)
   shv_file_node_t *fwUpdate_node;
 
   // also, if we got here, we can confirm the previous image is OK
-  printf("Version 31\n");
+  printf("Version 33\n");
   printf("Trying to confirm image\n");
   if (nxboot_confirm() < 0) {
     perror("nxboot confirm");
@@ -372,8 +396,6 @@ shv_node_t *shv_tree_create(void)
     goto err2;
   }
   
-  printf("%d %d %d %d %d", nxb_state.update, nxb_state.recovery, nxb_state.recovery_valid, nxb_state.primary_confirmed, nxb_state.next_boot);
-  
   // now, choose the right partition
   if (nxb_state.update == NXBOOT_SECONDARY_SLOT_NUM) {
     file_name = CONFIG_NXBOOT_SECONDARY_SLOT_PATH;
@@ -400,10 +422,10 @@ shv_node_t *shv_tree_create(void)
 
   fwUpdate_node->file_type = REGULAR;
   fwUpdate_node->file_size = geometry.erasesize * geometry.neraseblocks;
-  fwUpdate_node->crc = -1;
   fwUpdate_node->file_offset = 0;
   fwUpdate_node->file_pagesize = geometry.blocksize;
   fwUpdate_node->received_bytes = 0;
+  fwUpdate_node->crcstate = C_IMAP_START;
 
   shv_tree_add_child(tree_root, (shv_node_t*) fwUpdate_node);
   

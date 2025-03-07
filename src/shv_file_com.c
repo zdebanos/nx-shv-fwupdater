@@ -104,7 +104,7 @@ void shv_send_size(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
   }
 }
 
-void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
+void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item, uint32_t crc)
 {
   ccpcp_pack_context_init(&shv_ctx->pack_ctx,shv_ctx->shv_data,
                           SHV_BUF_LEN, shv_overflow_handler);
@@ -123,7 +123,7 @@ void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
 
     // Reply
     cchainpack_pack_int(&shv_ctx->pack_ctx, 2);
-    cchainpack_pack_uint(&shv_ctx->pack_ctx, item->crc);
+    cchainpack_pack_uint(&shv_ctx->pack_ctx, crc);
     
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     shv_overflow_handler(&shv_ctx->pack_ctx, 0); 
@@ -278,4 +278,110 @@ void shv_confirm_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
 
     shv_overflow_handler(&shv_ctx->pack_ctx, 0); 
   }
+}
+
+/*
+ * Returns negative in case of error.
+ * Returns 0 if the CRC of the whole file should be calculated.
+ * Returns 1 if the CRC should be calculated through offset:end of file.
+ * Returns 2 if the CRC should be calculated through offset:offset+size.
+ */
+int shv_process_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
+{
+  int ret;
+  ccpcp_unpack_context *ctx = &shv_ctx->unpack_ctx;
+
+  do {
+    cchainpack_unpack_next(ctx);
+    if (ctx->err_no != CCPCP_RC_OK) {
+      return -1;
+    }
+
+    switch (item->crcstate) {
+    case C_IMAP_START:
+      if (ctx->item.type == CCPCP_ITEM_IMAP) {
+        item->crcstate = C_IMAP_END;
+        item->crc_offset = -1;
+        item->crc_size = -1;
+      }
+      break;
+    case C_IMAP_END:
+      if (ctx->item.type == CCPCP_ITEM_CONTAINER_END) {
+        item->crcstate = C_IMAP_START;
+        // decide on what was parsed
+        if (item->crc_offset == -1) {
+          return 0;
+        } else {
+          if (item->crc_size == -1) {
+            return 1;
+          } else {
+            return 2;
+          }
+        }
+        break;
+      } else {
+        item->crcstate = C_REQUEST_1;
+      }
+    case C_REQUEST_1:
+      if (ctx->item.type == CCPCP_ITEM_INT) {
+        if (ctx->item.as.Int == 1) {
+          item->crcstate = C_LIST_START;
+        } else {
+          shv_unpack_discard(shv_ctx);
+          ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+        }
+      } else if (ctx->item.type == CCPCP_ITEM_UINT) {
+        if (ctx->item.as.UInt == 1) {
+          item->crcstate = C_LIST_START;
+        } else {
+          shv_unpack_discard(shv_ctx);
+          ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+        }
+
+      } else {
+        shv_unpack_discard(shv_ctx);
+        ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+      }
+      break;
+    case C_LIST_START:
+      if (ctx->item.type == CCPCP_ITEM_LIST) {
+        item->crcstate = C_OFFSET;
+      } else {
+        shv_unpack_discard(shv_ctx);
+        ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+      }
+      break;
+    case C_OFFSET:
+      if (ctx->item.type == CCPCP_ITEM_INT) {
+        item->crc_offset = ctx->item.as.Int;
+        item->crcstate = C_SIZE;
+      } else {
+        shv_unpack_discard(shv_ctx);
+        ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+      }
+      break;
+    case C_LIST_END:
+      if (ctx->item.type == CCPCP_ITEM_CONTAINER_END) {
+        item->crcstate = C_IMAP_END;
+      }
+      break;
+    case C_SIZE:
+      // this marks the end of list parsing
+      if (ctx->item.type == CCPCP_ITEM_CONTAINER_END) {
+        item->crcstate = C_IMAP_END;
+      } else if (ctx->item.type == CCPCP_ITEM_INT) {
+        item->crc_size = ctx->item.as.Int;
+        item->crcstate = C_LIST_END;
+      } else {
+        shv_unpack_discard(shv_ctx);
+        ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
+      }
+      break;
+    }
+
+  } while (ctx->err_no == CCPCP_RC_OK);
+
+  ret = -ctx->err_no;
+  ctx->err_no = CCPCP_RC_OK;
+  return ret;
 }

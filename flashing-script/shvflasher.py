@@ -20,8 +20,8 @@ async def shv_flasher(connection: str, name: str, path_to_root: str, queue: asyn
 
     maxwrite = res[5]
     print(f"Received maximum enabled write size {maxwrite}.")
-    
     print(f"Started uploading new firmware {name}... this may take some time.")
+    size = 0
     with open(name, mode="rb") as f:
         # first, compute the CRC from the zlib library
         # turns out, NuttX uses the same polynomial 
@@ -47,7 +47,7 @@ async def shv_flasher(connection: str, name: str, path_to_root: str, queue: asyn
     print("Flashing completed!")
     
     # now get the CRC from the device and reset the device, if OK
-    res = await client.call(node_name, "crc")
+    res = await client.call(node_name, "crc", [0, size])
     # just to be sure, make it unsigned
     res = res & 0xFFFFFFFF
     # the result of the CRC is signed, actually, so make reinterpret it as unsigned
