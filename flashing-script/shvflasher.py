@@ -4,6 +4,7 @@
 #            Stepan Pressl 20025 <pressl.stepan@gmail.com>
 import asyncio
 import io
+import crcmod
 
 from shv import RpcUrl, SHVBytes, ValueClient
 
@@ -13,14 +14,18 @@ async def shv_flasher(connection: str, name: str, path_to_root: str, queue: asyn
     client = await ValueClient.connect(url)
     assert client is not None
     node_name = f"{path_to_root}/fwUpdate" 
+    node_name_dotdevice = f"{path_to_root}/.device"
 
     res = await client.call(node_name, "stat")
 
     maxwrite = res[5]
     print(f"Received maximum enabled write size {maxwrite}.")
-    
     print(f"Started uploading new firmware {name}... this may take some time.")
+    size = 0
     with open(name, mode="rb") as f:
+        # first, compute the CRC from the zlib library
+        # turns out, NuttX uses the same polynomial 
+
         if queue:
             f.seek(0, io.SEEK_END)
             size = f.tell()
@@ -28,7 +33,10 @@ async def shv_flasher(connection: str, name: str, path_to_root: str, queue: asyn
             transfers = size / maxwrite
 
         i = 0
+        crc = 0
         while data := f.read(maxwrite):
+            crc_func = crcmod.mkCrcFun(0x104C11DB7, initCrc=crc, rev=True, xorOut=0x00000000)
+            crc = crc_func(data)
             offset = i * maxwrite
             res = await client.call(node_name, "write", [offset, SHVBytes(data)])
             i += 1
@@ -37,4 +45,17 @@ async def shv_flasher(connection: str, name: str, path_to_root: str, queue: asyn
                 queue.put_nowait(currProgress)
 
     print("Flashing completed!")
-    await client.disconnect()
+    
+    # now get the CRC from the device and reset the device, if OK
+    res = await client.call(node_name, "crc", [0, size])
+    # just to be sure, make it unsigned
+    res = res & 0xFFFFFFFF
+    # the result of the CRC is signed, actually, so make reinterpret it as unsigned
+    print(f"Calculated CRC: {hex(crc)} and received: {hex(res)}")
+
+    if res == crc:
+        print("Checksum match, perform reset!")
+        res = await client.call(node_name_dotdevice, "reset")
+        await client.disconnect()
+    else:
+        print("Checksum mismatch!")
