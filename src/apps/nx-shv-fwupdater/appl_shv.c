@@ -1,8 +1,10 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 
 #include "shv_tree.h"
 #include "shv_file_com.h"
@@ -11,7 +13,27 @@
 
 #include "appl_shv.h"
 
+#if defined(__linux__)
+
 #define LINUX_TESTING
+#define LINUX_TESTING_FILE_SIZE (16 * 1024 * 1024)
+#define LINUX_TESTING_PAGE_SIZE (4 * 1024)
+#define LINUX_TESTING_FILE_NAME "fwupdate.img"
+
+inline static
+uint32_t crc32part(const uint8_t *src, size_t len, uint32_t crc32val)
+{
+  return 0;
+}
+
+#else /*__linux__*/
+
+#include <sys/boardctl.h>
+#include <nxboot.h>
+#include <nuttx/mtd/mtd.h>
+#include <nuttx/crc32.h>
+
+#endif /*__linux__*/
 
 /****************************************************************************/
 
@@ -142,7 +164,13 @@ const shv_dmap_t shv_dev_dotdevice_dmap =
   }
 };
 
-static int shv_file_fd;
+#ifndef LINUX_TESTING
+static int flash_partition_info(int fd, struct mtd_geometry_s *geometry);
+static int flash_partition_erase_last_sector(int fd, struct mtd_geometry_s geometry);
+#endif /*LINUX_TESTING*/
+
+static bool nofirstwrite = false;
+uint8_t crcbuf[256];
 
 /****************************************************************************
  * Name: shv_device_type
@@ -160,17 +188,108 @@ int shv_root_device_type(shv_con_ctx_t * shv_ctx, shv_node_t *item, int rid)
   return 0;
 }
 
+static uint32_t shv_file_calculate_crc(int size, int offset, int fd)
+{
+  uint32_t crc = 0;
+
+  // first, move to the desired offset
+  if (lseek(fd, offset, SEEK_SET) == (off_t) -1) {
+    perror("lseek");
+    return 0;
+  }
+
+  while (size > 0) {
+    int to_read, readsize;
+    if (size >= sizeof(crcbuf)) {
+      to_read = sizeof(crcbuf);
+    } else {
+      to_read = size;
+    }
+    readsize = read(fd, crcbuf, to_read);
+    if (readsize < 0) {
+      perror("read in crc");
+      return 0;
+    }
+    size -= readsize;
+    crc = crc32part(crcbuf, readsize, crc);
+  }
+
+  return crc;
+}
+
 int shv_file_crc(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
-  shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
-  shv_send_int(shv_ctx, rid, 0);
+  int ret;
+  int offset, size;
+  uint32_t crc;
+  shv_file_node_t *file = (shv_file_node_t *) item;
+
+#ifndef LINUX_TESTING
+  const char *file_name = NULL;
+  struct mtd_geometry_s geometry;
+
+  ioctl(file->fd, BIOC_FLUSH);
+  // flush does not work properly, so we just do this hack:
+  // first close the file and then reopen it, this actually flushes the data
+  close(file->fd);
+  if (file->slotnum == NXBOOT_SECONDARY_SLOT_NUM) {
+    file_name = CONFIG_NXBOOT_SECONDARY_SLOT_PATH;
+  } else if (file->slotnum == NXBOOT_TERTIARY_SLOT_NUM) {
+    file_name = CONFIG_NXBOOT_TERTIARY_SLOT_PATH;
+  } else {
+    return ERROR;
+  }
+  file->fd = open(file_name, O_RDWR);
+#else /*LINUX_TESTING*/
+  fsync(file->fd);
+#endif /*LINUX_TESTING*/
+
+  ret = shv_process_crc(shv_ctx, rid, file);
+  if (ret == 0) {
+    // this shall calculate the crc over the whole file!
+    offset = 0;
+    size = file->file_size;
+  } else if (ret == 1) {
+    // this shall calculate the crc from offset to end
+    offset = file->crc_offset;
+    size = file->file_size - file->crc_offset;
+  } else if (ret == 2) {
+    // this shall calculate the crc within a specified range
+    offset = file->crc_offset;
+    size = file->crc_size;
+  } else {
+    ret = -1;
+  }
+
+  file->received_bytes = 0;
+  if (ret >= 0) {
+    crc = shv_file_calculate_crc(size, offset, file->fd);
+  } else {
+    crc = 0;
+  }
+  shv_send_crc(shv_ctx, rid, (shv_file_node_t *) item, crc);
   return 0;
 }
 
 int shv_file_write(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
   int ret;
-  printf("Write called!\n");
+  shv_file_node_t *file = (shv_file_node_t *) item;
+
+  if (!nofirstwrite) {
+    // during the first write, the flash_partition_area must be erased
+   #ifndef LINUX_TESTING
+    struct mtd_geometry_s geometry;
+    if (flash_partition_info(file->fd, &geometry) >= 0) {
+      if (flash_partition_erase_last_sector(file->fd, geometry) >= 0) {
+        printf("First page erase!\n");
+        nofirstwrite = true;
+      }
+    }
+   #else /*LINUX_TESTING*/
+    nofirstwrite = true;
+   #endif /*LINUX_TESTING*/
+  }
   ret = shv_process_write(shv_ctx, rid, (shv_file_node_t *) item);
   shv_confirm_write(shv_ctx, rid, (shv_file_node_t *) item);
   return 0;
@@ -178,7 +297,6 @@ int shv_file_write(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 
 int shv_file_stat(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
-  printf("Stat called!\n");
   shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
   shv_send_stat(shv_ctx, rid, (shv_file_node_t *) item);
   return 0;
@@ -193,7 +311,6 @@ int shv_file_size(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 
 int shv_file_confirmed(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
-  printf("Confirmed called!\n");
   shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
   shv_send_int(shv_ctx, rid, 0);
   return 0;
@@ -201,10 +318,79 @@ int shv_file_confirmed(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 
 int shv_device_reset(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 {
-  printf("Reset called!\n");
   shv_unpack_data(&shv_ctx->unpack_ctx, 0, 0);
+  shv_send_int(shv_ctx, rid, 0);
+
+  // wait a bit so the response arrives, then reset
+  usleep(2000 * 1000);
+ #ifndef LINUX_TESTING
+  boardctl(BOARDIOC_RESET, BOARDIOC_RESETCAUSE_CPU_SOFT);
+ #else /*LINUX_TESTING*/
+  printf("Device reset requested!\n");
+  exit(0);
+ #endif /*LINUX_TESTING*/
+
+  // should not get here
   return 0;
 }
+
+#ifndef LINUX_TESTING
+/****************************************************************************
+ * Name: flash_partition_erase_last_sector
+ *
+ * Description:
+ *   Erases the last sector of the partition
+ *
+ * Input parameters:
+ *   fd: Valid file descriptor.
+ *
+ * Returned Value:
+ *   0 on success, -1 on failure.
+ *
+ ****************************************************************************/
+
+static int flash_partition_erase_last_sector(int fd, struct mtd_geometry_s geometry)
+{
+  int ret;
+  struct mtd_erase_s erase;
+
+  erase.startblock = geometry.neraseblocks - 1;
+  erase.nblocks = 1;
+
+  ret = ioctl(fd, MTDIOC_ERASESECTORS, &erase);
+  if (ret < 0) {
+    return ERROR;
+  }
+
+  return OK;
+}
+
+/****************************************************************************
+ * Name: flash_partition_info
+ *
+ * Description:
+ *   Get flash parameters
+ *
+ * Input parameters:
+ *   fd: Valid file descriptor.
+ *
+ * Returned Value:
+ *   0 on success, -1 on failure.
+ *
+ ****************************************************************************/
+
+static int flash_partition_info(int fd, struct mtd_geometry_s *geometry)
+{
+  int ret;
+  ret = ioctl(fd, MTDIOC_GEOMETRY, (unsigned long)((uintptr_t)geometry));
+  if (ret < 0)
+    {
+      return ERROR;
+    }
+  return OK;
+}
+
+#endif /*LINUX_TESTING*/
 
 /****************************************************************************
  * Name: shv_tree_create
@@ -216,11 +402,25 @@ int shv_device_reset(shv_con_ctx_t *shv_ctx, shv_node_t *item, int rid)
 
 shv_node_t *shv_tree_create(void)
 {
+  const char *file_name;
+ #ifndef LINUX_TESTING
+  struct nxboot_state nxb_state;
+  struct mtd_geometry_s geometry;
+ #endif /*LINUX_TESTING*/
+
   shv_node_t *tree_root, *dotdevice_node, *fwStable_node;
   shv_file_node_t *fwUpdate_node;
-  shv_node_typed_val_t *item_val;
 
-  int mode = 0;
+  // also, if we got here, we can confirm the previous image is OK
+  printf("Version 33\n");
+  printf("Trying to confirm image\n");
+ #ifndef LINUX_TESTING
+  if (nxboot_confirm() < 0) {
+    perror("nxboot confirm");
+  } else {
+    printf("Image confirm OK!\n");
+  }
+ #endif /*LINUX_TESTING*/
 
   tree_root = shv_tree_node_new("", &shv_dev_root_dmap, 0);
   if (tree_root == NULL) {
@@ -232,44 +432,86 @@ shv_node_t *shv_tree_create(void)
   fwUpdate_node = shv_tree_file_node_new("fwUpdate", &shv_dev_fwUpdate_dmap, 0);
   if (fwUpdate_node == NULL)  {
     fprintf(stderr, "ERROR: shv_tree_node_new failed\n");
-    free(tree_root);
-    return NULL;
+    goto err1;
   }
+
+ #ifndef LINUX_TESTING
   // before adding the node to the tree, initialize its parameters 
-  int flags = O_CREAT | O_RDWR;
-  fwUpdate_node->fd = open("shvfile", flags);
+  // this requires getting the information about the flash memory
+  // and since this only now works with nxboot, we must get the
+  // right partition 
+  
+  if (nxboot_get_state(&nxb_state) < 0) {
+    perror("nxboot_get_state");
+    goto err2;
+  }
+  
+  // now, choose the right partition
+  if (nxb_state.update == NXBOOT_SECONDARY_SLOT_NUM) {
+    file_name = CONFIG_NXBOOT_SECONDARY_SLOT_PATH;
+    fwUpdate_node->slotnum = NXBOOT_SECONDARY_SLOT_NUM;
+  } else if (nxb_state.update == NXBOOT_TERTIARY_SLOT_NUM) {
+    file_name = CONFIG_NXBOOT_TERTIARY_SLOT_PATH;
+    fwUpdate_node->slotnum = NXBOOT_TERTIARY_SLOT_NUM;
+  } else {
+    fprintf(stderr, "Unexpected value in nxboot\n");
+    goto err2;
+  }
+ #else /*LINUX_TESTING*/
+  file_name = LINUX_TESTING_FILE_NAME;
+ #endif /*LINUX_TESTING*/
+  printf("Opening %s\n", file_name);
+  
+  fwUpdate_node->fd = open(file_name, O_RDWR);
   if (fwUpdate_node->fd < 0) {
     perror("open");
-    free(tree_root);
-    free(fwUpdate_node);
-    return NULL;
+    goto err2;
   }
+
+ #ifndef LINUX_TESTING
+  if (ioctl(fwUpdate_node->fd, MTDIOC_GEOMETRY, (unsigned long)((uintptr_t)&geometry)) < 0) {
+    perror("ioctl");
+    goto err3;
+  }
+  fwUpdate_node->file_size = geometry.erasesize * geometry.neraseblocks;
+  fwUpdate_node->file_pagesize = geometry.blocksize;
+ #else /*LINUX_TESTING*/
+  fwUpdate_node->file_size = LINUX_TESTING_FILE_SIZE;
+  fwUpdate_node->file_pagesize = LINUX_TESTING_PAGE_SIZE;
+ #endif /*LINUX_TESTING*/
+
   fwUpdate_node->file_type = REGULAR;
-  fwUpdate_node->crc = -1;
+  fwUpdate_node->file_offset = 0;
+  fwUpdate_node->received_bytes = 0;
+  fwUpdate_node->crcstate = C_IMAP_START;
 
   shv_tree_add_child(tree_root, (shv_node_t*) fwUpdate_node);
-  
   
   fwStable_node = shv_tree_node_new("fwStable", &shv_dev_fwStable_dmap, 0);
   if (fwStable_node == NULL) {
     fprintf(stderr, "ERROR: shv_tree_node_new failed\n");
-    free(fwUpdate_node);
-    free(tree_root);
-    return NULL;
+    goto err3;
   }
   shv_tree_add_child(tree_root, fwStable_node);
   
   dotdevice_node = shv_tree_node_new(".device", &shv_dev_dotdevice_dmap, 0);
   if (dotdevice_node == NULL) {
     fprintf(stderr, "ERROR: shv_tree_node_new failed\n");
-    free(fwUpdate_node);
-    free(fwStable_node);
-    free(tree_root);
-    return NULL;
+    goto err4;
   }
   shv_tree_add_child(tree_root, dotdevice_node);
   
   return tree_root;
+  
+err4:
+  free(fwStable_node);
+err3:
+  close(fwUpdate_node->fd);
+err2:
+  free(fwUpdate_node);
+err1:
+  free(tree_root);
+  return NULL;
 }
 
 /****************************************************************************

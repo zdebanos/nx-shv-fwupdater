@@ -23,6 +23,17 @@ enum shv_unpack_write_state
   IMAP_STOP
 };
 
+enum shv_unpack_crc_state
+{
+  C_IMAP_START,
+  C_IMAP_END,
+  C_REQUEST_1,
+  C_LIST_START,
+  C_OFFSET,
+  C_LIST_END,
+  C_SIZE
+};
+
 typedef struct shv_node_list {
   int mode;                         /* Mode selection (GAVL vs GSA, static vs dynamic) */
   union {
@@ -61,7 +72,12 @@ typedef struct shv_file_node {
   int file_size;
   int file_pagesize;
   int file_offset;
-  int crc;
+  int received_bytes;        /* Accumulator to check for overflows */
+  int slotnum;
+
+  enum shv_unpack_crc_state  crcstate;
+  int crc_offset;
+  int crc_size;
 } shv_file_node_t;
 
 typedef struct shv_node_typed_val {
