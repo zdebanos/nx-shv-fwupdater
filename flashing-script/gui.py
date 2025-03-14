@@ -62,6 +62,27 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Decrease verbosity level of logging",
     )
+    parser.add_argument(
+        '-i', '--image',
+        dest='image',
+        type=str,
+        default='update.img',
+        help='Image path'
+    )
+    parser.add_argument(
+        '-m', '--mount',
+        dest='target_mount',
+        type=str,
+        default='test/samocon-1',
+        help='Target mount location on the SHV broker'
+    )
+    parser.add_argument(
+        '-s', '--server',
+        dest='shv_server',
+        type=str,
+        default='tcp://pysim@147.32.87.165:3755?password=pysimpass',
+        help='SHV server/broker'
+    )
     return parser.parse_args()
 
 
@@ -104,16 +125,20 @@ class confirmThread(QThread):
 
 
 class ShvFlasherGui(QDialog):
-    def __init__(self) -> None:
-        super().__init__(None)
+    def __init__(self, image = None, target_mount = None, shv_server = None) -> None:
+        super().__init__()
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setWindowTitle("NuttX Firmware Flasher over SHV")
 
-        lab1 = QLabel("SHV RCP URL")
-        self.set_interface()
+        lbl_shv_url = QLabel("SHV RCP URL")
+        self.set_interface(shv_server)
 
-        lab2 = QLabel("Image path")
-        self.image = QLineEdit("update.img", self)
+        lbl_image = QLabel("Image path")
+        self.image = QLineEdit( image if image is not None else "" , self)
+
+        lbl_target_mount = QLabel("Device mount")
+        self.target_mount = QLineEdit( target_mount if target_mount is not None else "", self)
+
         self.progress_bar = QProgressBar(self)
         self.progress_bar.setValue(0)
         self.progress_bar.setStyleSheet(PROGRESS_STYLE)
@@ -123,14 +148,16 @@ class ShvFlasherGui(QDialog):
         pb_exit = QPushButton("EXIT")
         grid = QGridLayout()
 
-        grid.addWidget(lab1, 0, 0)
+        grid.addWidget(lbl_shv_url, 0, 0)
         grid.addWidget(self.interface, 0, 1)
-        grid.addWidget(lab2, 1, 0)
+        grid.addWidget(lbl_image, 1, 0)
         grid.addWidget(self.image, 1, 1)
-        grid.addWidget(self.progress_bar, 2, 0, 1, 3)
-        grid.addWidget(pb_flash, 3, 0)
-        grid.addWidget(pb_confirm, 3, 1)
-        grid.addWidget(pb_exit, 3, 2)
+        grid.addWidget(lbl_target_mount, 2, 0)
+        grid.addWidget(self.target_mount, 2, 1)
+        grid.addWidget(self.progress_bar, 3, 0, 1, 3)
+        grid.addWidget(pb_flash, 4, 0)
+        grid.addWidget(pb_confirm, 4, 1)
+        grid.addWidget(pb_exit, 4, 2)
 
         pb_flash.clicked.connect(self.do_flash)
         pb_confirm.clicked.connect(self.do_confirm)
@@ -138,27 +165,27 @@ class ShvFlasherGui(QDialog):
 
         self.setLayout(grid)
 
-    def set_interface(self) -> None:
+    def set_interface(self, shv_server = None) -> None:
         self.interface = QComboBox()
         self.interface.setEditable(True)
         # tcp://user@localhost:3755?password=pass
         password = "admin password"
         self.interface.addItems([
-            F"tcp://admin@147.32.87.165:3755?password={password}"])
+                shv_server if shv_server is not None else ""
+            ])
 
     def do_flash(self) -> None:
         rpc_url = str(self.interface.currentText())
         img_path = str(self.image.text())
-        path_to_root = str("test/SaMoCon-SHV")
+        path_to_root = str(self.target_mount.text())
         workerFlash = flashThread(self, rpc_url, img_path, path_to_root, self.progress_bar)
         workerFlash.start()
 
     def do_confirm(self) -> None:
         rpc_url = str(self.interface.currentText())
-        path_to_root = str("test/SaMoCon-SHV")
+        path_to_root = str(self.target_mount.text())
         worker = confirmThread(self, rpc_url, path_to_root)
         worker.start()
-
 
 def main() -> None:
     args = parse_args()
@@ -169,9 +196,9 @@ def main() -> None:
 
     _ = QApplication(sys.argv)
 
-    dialog = ShvFlasherGui()
+    dialog = ShvFlasherGui(image = args.image, target_mount = args.target_mount,
+                           shv_server = args.shv_server)
     dialog.exec()
-
 
 if __name__ == "__main__":
     main()
