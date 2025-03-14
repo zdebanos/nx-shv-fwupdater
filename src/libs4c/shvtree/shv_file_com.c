@@ -38,15 +38,15 @@ void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
   }
   ccpcp_pack_context_init(&shv_ctx->pack_ctx,shv_ctx->shv_data,
                           SHV_BUF_LEN, shv_overflow_handler);
-  
+
   for (shv_ctx->shv_send = 0; shv_ctx->shv_send < 2; shv_ctx->shv_send++) {
     if (shv_ctx->shv_send) {
       cchainpack_pack_uint_data(&shv_ctx->pack_ctx, shv_ctx->shv_len);
     }
-    
+
     shv_ctx->shv_len = 0;
     cchainpack_pack_uint_data(&shv_ctx->pack_ctx, 1);
-    
+
     shv_pack_head_reply(shv_ctx, rid);
 
     // An IMap in a IMap.
@@ -58,7 +58,7 @@ void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
     // The first key (file type)
     cchainpack_pack_int(&shv_ctx->pack_ctx, FN_TYPE);
     cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_type);
-    
+
     // The second key (file size)
     cchainpack_pack_int(&shv_ctx->pack_ctx, FN_SIZE);
     cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_size);
@@ -66,12 +66,12 @@ void shv_send_stat(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
     // The third key (page size)
     cchainpack_pack_int(&shv_ctx->pack_ctx, FN_PAGESIZE);
     cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_pagesize);
-    
+
     // The fifth key (max send size)
     cchainpack_pack_int(&shv_ctx->pack_ctx, 5);
     // receive the blobs that are multiples of a pagesize
     cchainpack_pack_int(&shv_ctx->pack_ctx, 8*item->file_pagesize);
-    
+
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     shv_overflow_handler(&shv_ctx->pack_ctx, 0); 
@@ -82,15 +82,15 @@ void shv_send_size(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
 {
   ccpcp_pack_context_init(&shv_ctx->pack_ctx,shv_ctx->shv_data,
                           SHV_BUF_LEN, shv_overflow_handler);
-  
+
   for (shv_ctx->shv_send = 0; shv_ctx->shv_send < 2; shv_ctx->shv_send++) {
     if (shv_ctx->shv_send) {
       cchainpack_pack_uint_data(&shv_ctx->pack_ctx, shv_ctx->shv_len);
     }
-    
+
     shv_ctx->shv_len = 0;
     cchainpack_pack_uint_data(&shv_ctx->pack_ctx, 1);
-    
+
     shv_pack_head_reply(shv_ctx, rid);
 
     cchainpack_pack_imap_begin(&shv_ctx->pack_ctx);
@@ -98,7 +98,7 @@ void shv_send_size(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
     // Reply
     cchainpack_pack_int(&shv_ctx->pack_ctx, 2);
     cchainpack_pack_int(&shv_ctx->pack_ctx, item->file_size);
-    
+
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     shv_overflow_handler(&shv_ctx->pack_ctx, 0); 
   }
@@ -108,15 +108,15 @@ void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item, uint32
 {
   ccpcp_pack_context_init(&shv_ctx->pack_ctx,shv_ctx->shv_data,
                           SHV_BUF_LEN, shv_overflow_handler);
-  
+
   for (shv_ctx->shv_send = 0; shv_ctx->shv_send < 2; shv_ctx->shv_send++) {
     if (shv_ctx->shv_send) {
       cchainpack_pack_uint_data(&shv_ctx->pack_ctx, shv_ctx->shv_len);
     }
-    
+
     shv_ctx->shv_len = 0;
     cchainpack_pack_uint_data(&shv_ctx->pack_ctx, 1);
-    
+
     shv_pack_head_reply(shv_ctx, rid);
 
     cchainpack_pack_imap_begin(&shv_ctx->pack_ctx);
@@ -124,7 +124,7 @@ void shv_send_crc(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item, uint32
     // Reply
     cchainpack_pack_int(&shv_ctx->pack_ctx, 2);
     cchainpack_pack_uint(&shv_ctx->pack_ctx, crc);
-    
+
     cchainpack_pack_container_end(&shv_ctx->pack_ctx);
     shv_overflow_handler(&shv_ctx->pack_ctx, 0); 
   }
@@ -140,7 +140,7 @@ int shv_process_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
     if (ctx->err_no != CCPCP_RC_OK) {
       return -1;
     }
-    
+
     switch (item->state) {
     case IMAP_START: {
       // the start of imap, proceed next
@@ -192,14 +192,14 @@ int shv_process_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
         // save the loaded offset into the struct
         item->file_offset = ctx->item.as.Int;
         item->state = BLOB;
-        
+
         if (lseek(item->fd, item->file_offset, SEEK_SET) == (off_t)-1) {
           // how to handle errors?
           ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
           item->state = IMAP_START;
         } else {
         }
-        
+
       } else { 
         shv_unpack_discard(shv_ctx);
         ctx->err_no = CCPCP_RC_LOGICAL_ERROR;
@@ -266,10 +266,10 @@ void shv_confirm_write(shv_con_ctx_t *shv_ctx, int rid, shv_file_node_t *item)
     if (shv_ctx->shv_send) {
       cchainpack_pack_uint_data(&shv_ctx->pack_ctx, shv_ctx->shv_len);
     }
-    
+
     shv_ctx->shv_len = 0;
     cchainpack_pack_uint_data(&shv_ctx->pack_ctx, 1);
-    
+
     shv_pack_head_reply(shv_ctx, rid);
 
     // Empty IMap
