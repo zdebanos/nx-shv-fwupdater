@@ -332,6 +332,7 @@ shv_node_t *shv_tree_create(void)
 {
  #ifndef LINUX_TESTING
   struct mtd_geometry_s geometry;
+  int flash_fd;
  #else /*LINUX_TESTING*/
   const char *file_name;
  #endif /*LINUX_TESTING*/
@@ -340,7 +341,7 @@ shv_node_t *shv_tree_create(void)
   shv_file_node_t *fwUpdate_node;
 
   // also, if we got here, we can confirm the previous image is OK
-  printf("Version 36\n");
+  printf("Version 37\n");
 
   tree_root = shv_tree_node_new("", &shv_dev_root_dmap, 0);
   if (tree_root == NULL) {
@@ -355,92 +356,49 @@ shv_node_t *shv_tree_create(void)
     goto err1;
   }
 
- #ifndef LINUX_TESTING
-  fwUpdate_node->fd = nxboot_open_update_partition();
- #else /*LINUX_TESTING*/
-  file_name = LINUX_TESTING_FILE_NAME;
-  printf("Opening %s\n", file_name);
-  fwUpdate_node->fd = open(file_name, O_RDWR);
- #endif /*LINUX_TESTING*/
-
-  if (fwUpdate_node->fd < 0) {
-    perror("open");
+#ifndef LINUX_TESTING
+  flash_fd = nxboot_open_update_partition();
+  if (flash_fd < 0) {
+    perror("flash_fd");
     goto err2;
   }
-
- #ifndef LINUX_TESTING
   if (ioctl(fwUpdate_node->fd, MTDIOC_GEOMETRY, (unsigned long)((uintptr_t)&geometry)) < 0) {
     perror("ioctl");
     goto err3;
   }
-  fwUpdate_node->file_size = geometry.erasesize * geometry.neraseblocks;
+  close(flash_fd);
+  fwUpdate_node->name          = "*NXBOOT*";
+  fwUpdate_node->file_maxsize  = geometry.erasesize * geometry.neraseblocks;
   fwUpdate_node->file_pagesize = geometry.blocksize;
- #else /*LINUX_TESTING*/
-  fwUpdate_node->file_size = LINUX_TESTING_FILE_SIZE;
+#else
+  fwUpdate_node->name          = LINUX_TESTING_FILE_NAME;
+  fwUpdate_node->file_maxsize  = LINUX_TESTING_FILE_SIZE;
   fwUpdate_node->file_pagesize = LINUX_TESTING_PAGE_SIZE;
- #endif /*LINUX_TESTING*/
-
+#endif
   fwUpdate_node->file_type = REGULAR;
-  fwUpdate_node->file_offset = 0;
-  fwUpdate_node->received_bytes = 0;
-  fwUpdate_node->crcstate = C_IMAP_START;
 
   shv_tree_add_child(tree_root, (shv_node_t*) fwUpdate_node);
 
   fwStable_node = shv_tree_node_new("fwStable", &shv_dev_fwStable_dmap, 0);
   if (fwStable_node == NULL) {
     fprintf(stderr, "ERROR: shv_tree_node_new failed\n");
-    goto err3;
+    goto err2;
   }
   shv_tree_add_child(tree_root, fwStable_node);
 
   dotdevice_node = shv_tree_node_new(".device", &shv_dev_dotdevice_dmap, 0);
   if (dotdevice_node == NULL) {
     fprintf(stderr, "ERROR: shv_tree_node_new failed\n");
-    goto err4;
+    goto err3;
   }
   shv_tree_add_child(tree_root, dotdevice_node);
-
   return tree_root;
 
-err4:
-  free(fwStable_node);
 err3:
-  close(fwUpdate_node->fd);
+  free(fwStable_node);
 err2:
   free(fwUpdate_node);
 err1:
   free(tree_root);
   return NULL;
 }
-
-/****************************************************************************
- * Name: shv_file_tree_init
- *
- * Description:
- *  Entry point for SHV related operations. Calls shv_tree_create to create
- *  a SHV tree and then initialize SHV connection.
- *
- ****************************************************************************/
-
-shv_con_ctx_t *shv_tree_init(void)
-{
-  shv_node_t *tree_root;
-
-  tree_root = shv_tree_create();
-  if (tree_root == NULL) {
-    fprintf(stderr, "ERROR: shv_tree_create() failed.\n");
-    return NULL;
-  }
-
-  /* Initialize SHV connection */
-
-  shv_con_ctx_t *ctx = shv_com_init(tree_root);
-  if (ctx == NULL) {
-    fprintf(stderr, "ERROR: shv_init() failed.\n");
-    return NULL;
-  }
-
-  return ctx;
-}
-
