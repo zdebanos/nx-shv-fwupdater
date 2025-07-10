@@ -1,0 +1,3 @@
+[submodule "submodule/libs4c"]
+	path = submodule/libs4c
+	url = https://github.com/silicon-heaven/shv-libs4c
