@@ -27,7 +27,6 @@ PRIORITY  += $(CONFIG_EXAMPLES_NX_SHV_FWUPDATER_PRIORITY)
 STACKSIZE += $(CONFIG_EXAMPLES_NX_SHV_FWUPDATER_STACKSIZE)
 
 MAINSRC += nx_shv_fwupdater.c
-include src/Makefile
 
 # Build with WebAssembly when CONFIG_INTERPRETERS_WAMR is enabled
 
